@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime
 
 database_years = [2020, 2021, 2022, 2023, 2024]
-conection = sqlite3.connect("testing.db")
+conection = sqlite3.connect("training.db")
 cursor = conection.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS team_game_stats (
@@ -128,8 +128,8 @@ def process_game(game_id, game_date):
             row,
         )
     return True
-for year in years:
-  url = f"{base_url}/schedule/basketball-men/d1/{database_years}"
+for year in database_years:
+  url = f"{base_url}/schedule/basketball-men/d1/{year}"
   response = requests.get(url)
   response.raise_for_status()
   data = response.json()
