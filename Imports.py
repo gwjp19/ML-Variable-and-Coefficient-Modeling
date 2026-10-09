@@ -8,6 +8,7 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS team_game_stats (
   game_id INTEGER,
   team_id INTEGER,
+  game_dates TEXT,
   points INTEGER,
   field_goals_made INTEGER,
   field_goals_attempted INTEGER,
@@ -59,7 +60,7 @@ def poss(s):
     return (s["fieldGoalsAttempted"] - s["offensiveRebounds"]
             + 0.475 * s["freeThrowsAttempted"] + s["turnovers"])
 
-def process_game(game_id):
+def process_game(game_id, game_date):
     """Returns True if saved, False if the game should be skipped/retried."""
     game_id_url = f"{base_url}/game/{game_id}/team-stats"
     game_id_response = requests.get(game_id_url)
@@ -91,6 +92,7 @@ def process_game(game_id):
             rows.append((
                 int(game_id),
                 int(team["teamId"]),
+                txt(game_date),
                 pts(stats),
                 stats["fieldGoalsMade"],
                 stats["fieldGoalsAttempted"],
@@ -121,7 +123,7 @@ def process_game(game_id):
     for row in rows:
         cursor.execute(
             "INSERT OR REPLACE INTO team_game_stats VALUES ("
-            + ",".join("?" * 23) + ")",
+            + ",".join("?" * 24) + ")",
             row,
         )
     return True
@@ -154,7 +156,7 @@ for date in dates:
     scoreboard = response.json()
     for game in scoreboard["games"]:
         game_id = game["game"]["gameID"]
-        if not process_game(game_id):
+        if not process_game(game_id, game_date):
             skipped_games.append(game_id)
     conection.commit()  # save after each date so a crash doesn't lose everything
 
@@ -170,12 +172,12 @@ for date in skipped_dates:
     response.raise_for_status()
     for game in response.json()["games"]:
         game_id = game["game"]["gameID"]
-        if not process_game(game_id):
+        if not process_game(game_id, game_date):
             skipped_games.append(game_id)
 
 # retry skipped games
 for game_id in skipped_games:
-    if not process_game(game_id):
+    if not process_game(game_id, game_date):
         print(f"{game_id}: still failing")
 
 conection.commit()
