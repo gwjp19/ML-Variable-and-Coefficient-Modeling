@@ -9,7 +9,6 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS team_game_stats (
   game_id INTEGER,
   team_id INTEGER,
-  game_dates TEXT,
   points INTEGER,
   field_goals_made INTEGER,
   field_goals_attempted INTEGER,
@@ -61,7 +60,7 @@ def poss(s):
     return (s["fieldGoalsAttempted"] - s["offensiveRebounds"]
             + 0.475 * s["freeThrowsAttempted"] + s["turnovers"])
 
-def process_game(game_id, game_date):
+def process_game(game_id):
     """Returns True if saved, False if the game should be skipped/retried."""
     game_id_url = f"{base_url}/game/{game_id}/team-stats"
     game_id_response = requests.get(game_id_url)
@@ -93,7 +92,6 @@ def process_game(game_id, game_date):
             rows.append((
                 int(game_id),
                 int(team["teamId"]),
-                txt(game_date),
                 pts(stats),
                 stats["fieldGoalsMade"],
                 stats["fieldGoalsAttempted"],
@@ -124,7 +122,7 @@ def process_game(game_id, game_date):
     for row in rows:
         cursor.execute(
             "INSERT OR REPLACE INTO team_game_stats VALUES ("
-            + ",".join("?" * 24) + ")",
+            + ",".join("?" * 23) + ")",
             row,
         )
     return True
