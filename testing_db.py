@@ -156,7 +156,7 @@ for date in dates:
     scoreboard = response.json()
     for game in scoreboard["games"]:
         game_id = game["game"]["gameID"]
-        if not process_game(game_id, game_date):
+        if not process_game(game_id, date):
             skipped_games.append(game_id)
     conection.commit()  # save after each date so a crash doesn't lose everything
 
@@ -172,7 +172,7 @@ for date in skipped_dates:
     response.raise_for_status()
     for game in response.json()["games"]:
         game_id = game["game"]["gameID"]
-        if not process_game(game_id, game_date):
+        if not process_game(game_id, date):
             skipped_games.append(game_id)
 
 # retry skipped games
