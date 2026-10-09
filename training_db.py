@@ -127,57 +127,58 @@ def process_game(game_id):
         )
     return True
 for year in database_years:
-  url = f"{base_url}/schedule/basketball-men/d1/{year}"
+  print(f"Starting season: {year}", flush=True)
+  url = f"{base_url}/schedule-alt/basketball-men/d1/{year}"
   response = requests.get(url)
   response.raise_for_status()
   data = response.json()
-
-skipped_dates = []
-skipped_games = []
-
-# unique dates, sorted chronologically
-all_games = data["data"]["schedules"]["games"]
-dates = sorted(
+  
+  skipped_dates = []
+  skipped_games = []
+    
+  all_games = data["data"]["schedules"]["games"]
+  dates = sorted(
     {g["contestDate"] for g in all_games},
     key=lambda d: datetime.strptime(d, "%m/%d/%Y"),
-)
-
-for date in dates:
+  )
+  for date in dates:
     month, day, year = date.split("/")
     month, day = month.zfill(2), day.zfill(2)
     url = f"{base_url}/scoreboard/basketball-men/d1/{year}/{month}/{day}/all-conf"
     response = requests.get(url)
     if response.status_code == 502:
-        print(f"API returned 502, skipping date {date}")
-        skipped_dates.append(date)
-        continue
+      print(f"API returned 502, skipping date {date}")
+      skipped_dates.append(date)
+      continue
     response.raise_for_status()
     scoreboard = response.json()
     for game in scoreboard["games"]:
-        game_id = game["game"]["gameID"]
-        if not process_game(game_id, date):
-            skipped_games.append(game_id)
-    conection.commit()  # save after each date so a crash doesn't lose everything
-
-# retry skipped dates
-for date in skipped_dates:
+      game_id = game["game"]["gameID"]
+      if not process_game(game_id):
+        skipped_games.append(game_id)
+    conection.commit()
+  
+      
+  for date in skipped_dates:
     month, day, year = date.split("/")
     month, day = month.zfill(2), day.zfill(2)
     url = f"{base_url}/scoreboard/basketball-men/d1/{year}/{month}/{day}/all-conf"
     response = requests.get(url)
     if response.status_code == 502:
-        print(f"Date {date}: API still unresponsive")
-        continue
+      print(f"Date {date}: API still unresponsive")
+      continue
     response.raise_for_status()
     for game in response.json()["games"]:
-        game_id = game["game"]["gameID"]
-        if not process_game(game_id, date):
-            skipped_games.append(game_id)
-
-# retry skipped games
-for game_id in skipped_games:
-    if not process_game(game_id, game_date):
-        print(f"{game_id}: still failing")
+      game_id = game["game"]["gameID"]
+      if not process_game(game_id):
+        skipped_games.append(game_id)
+  
+      
+  for game_id in skipped_games:
+    if not process_game(game_id):
+      print(f"{game_id}: still failing")
+      
+  print(f"Finished season: {year}", flush=True)
 
 conection.commit()
 conection.close()
