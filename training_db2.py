@@ -8,7 +8,9 @@ cursor = conection.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS team_game_stats (
   game_id INTEGER,
+  season_id INTEGER,
   team_id INTEGER,
+  game_date TEXT,
   points INTEGER,
   field_goals_made INTEGER,
   field_goals_attempted INTEGER,
@@ -60,7 +62,7 @@ def poss(s):
     return (s["fieldGoalsAttempted"] - s["offensiveRebounds"]
             + 0.475 * s["freeThrowsAttempted"] + s["turnovers"])
 
-def process_game(game_id):
+def process_game(game_id, season_id, game_date):
     """Returns True if saved, False if the game should be skipped/retried."""
     game_id_url = f"{base_url}/game/{game_id}/team-stats"
     game_id_response = requests.get(game_id_url)
@@ -91,7 +93,9 @@ def process_game(game_id):
             papp = pts(opponent) / poss(opponent)
             rows.append((
                 int(game_id),
+                int(season_id),
                 int(team["teamId"]),
+                game_date,
                 pts(stats),
                 stats["fieldGoalsMade"],
                 stats["fieldGoalsAttempted"],
@@ -164,7 +168,7 @@ for year in database_years:
     scoreboard = response.json()
     for game in scoreboard["games"]:
       game_id = game["game"]["gameID"]
-      if not process_game(game_id):
+      if not process_game(game_id, year, date):
         skipped_games.append(game_id)
     conection.commit()
   
@@ -180,12 +184,12 @@ for year in database_years:
     response.raise_for_status()
     for game in response.json()["games"]:
       game_id = game["game"]["gameID"]
-      if not process_game(game_id):
+      if not process_game(game_id, year, date):
         skipped_games.append(game_id)
   
       
   for game_id in skipped_games:
-    if not process_game(game_id):
+    if not process_game(game_id, year, date):
       print(f"{game_id}: still failing")
       
   print(f"Finished season: {year}", flush=True)
