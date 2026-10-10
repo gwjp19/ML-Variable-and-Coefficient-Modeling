@@ -2,15 +2,13 @@ import requests
 import sqlite3
 from datetime import datetime
 
-database_years = [2020, 2021, 2022, 2023, 2024]
-conection = sqlite3.connect("training2.db")
+database_years = [2023, 2024, 2025]
+conection = sqlite3.connect("training.db")
 cursor = conection.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS team_game_stats (
   game_id INTEGER,
-  season_id INTEGER,
   team_id INTEGER,
-  game_date TEXT,
   points INTEGER,
   field_goals_made INTEGER,
   field_goals_attempted INTEGER,
@@ -62,7 +60,7 @@ def poss(s):
     return (s["fieldGoalsAttempted"] - s["offensiveRebounds"]
             + 0.475 * s["freeThrowsAttempted"] + s["turnovers"])
 
-def process_game(game_id, season_id, game_date):
+def process_game(game_id):
     """Returns True if saved, False if the game should be skipped/retried."""
     game_id_url = f"{base_url}/game/{game_id}/team-stats"
     game_id_response = requests.get(game_id_url)
@@ -93,9 +91,7 @@ def process_game(game_id, season_id, game_date):
             papp = pts(opponent) / poss(opponent)
             rows.append((
                 int(game_id),
-                int(season_id),
                 int(team["teamId"]),
-                game_date,
                 pts(stats),
                 stats["fieldGoalsMade"],
                 stats["fieldGoalsAttempted"],
@@ -126,10 +122,11 @@ def process_game(game_id, season_id, game_date):
     for row in rows:
         cursor.execute(
             "INSERT OR REPLACE INTO team_game_stats VALUES ("
-            + ",".join("?" * 25) + ")",
+            + ",".join("?" * 23) + ")",
             row,
         )
     return True
+
 for year in database_years:
   print(f"Starting season: {year}", flush=True)
   url = f"{base_url}/schedule-alt/basketball-men/d1/{year}"
@@ -139,16 +136,25 @@ for year in database_years:
   
   skipped_dates = []
   skipped_games = []
-    
-  all_games = data["data"]["schedules"]["games"]
+
+  print(f"season requested: {year}", flush=True)
+  print(f"response data: {data}", flush=True)
+  
+  schedules = data.get("data", {}).get("schedules")
+  if schedules is None:
+      print(f"No Schedule for {year}", flush=True)
+      continue
+  
+  all_games = schedules["games"]
+  
   dates = sorted(
     {g["contestDate"] for g in all_games},
     key=lambda d: datetime.strptime(d, "%m/%d/%Y"),
   )
   for date in dates:
-    month, day, year = date.split("/")
+    month, day, game_year = date.split("/")
     month, day = month.zfill(2), day.zfill(2)
-    url = f"{base_url}/scoreboard/basketball-men/d1/{year}/{month}/{day}/all-conf"
+    url = f"{base_url}/scoreboard/basketball-men/d1/{game_year}/{month.zfill(2)}/{day.zfill(2)}/all-conf"
     response = requests.get(url)
     if response.status_code == 502:
       print(f"API returned 502, skipping date {date}")
@@ -158,7 +164,7 @@ for year in database_years:
     scoreboard = response.json()
     for game in scoreboard["games"]:
       game_id = game["game"]["gameID"]
-      if not process_game(game_id, year, date):
+      if not process_game(game_id):
         skipped_games.append(game_id)
     conection.commit()
   
@@ -174,12 +180,12 @@ for year in database_years:
     response.raise_for_status()
     for game in response.json()["games"]:
       game_id = game["game"]["gameID"]
-      if not process_game(game_id, year, date):
+      if not process_game(game_id):
         skipped_games.append(game_id)
   
       
   for game_id in skipped_games:
-    if not process_game(game_id, year, date):
+    if not process_game(game_id):
       print(f"{game_id}: still failing")
       
   print(f"Finished season: {year}", flush=True)
@@ -187,4 +193,4 @@ for year in database_years:
 conection.commit()
 conection.close()
 
-print("Finished downloading database")
+print("Finished downloading database")abase")
