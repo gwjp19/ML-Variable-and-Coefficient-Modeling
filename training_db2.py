@@ -197,4 +197,4 @@ for year in database_years:
 conection.commit()
 conection.close()
 
-print("Finished downloading database")abase")
+print("Finished downloading database")
