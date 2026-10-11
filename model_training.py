@@ -6,7 +6,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score, log_loss, brier_score_loss
 from sklearn.model_selection import train_test_split
 
-conn = sqlite3.connect("training.db")
+conn = sqlite3.connect("training2.db")
 query = "SELECT * FROM team_game_stats"
 
 training = pd.read_sql_query(query, conn)
@@ -72,26 +72,23 @@ def build_calibration_ready_model(X, y, **overrides):
     best_n = find_best_n_estimators(X, y, **overrides)
     params = dict(BASE_XGB_PARAMS, n_estimators=best_n)
     params.update(overrides)
-    return xgb.XGBRegression(**params), best_n
+    return xgb.XGBRegressor(**params), best_n
 
 def report(y_true, probs, label):
     preds = (probs >= 0.5).astype(int)
     print(f"\n{label}")
     print("-" * len(label))
     print("Accuracy:", accuracy_score(y_true, preds))
-    print("Log Loss:", log_loss(y_true, probs))
-    print("Brier Score:", brier_score_loss(y_true, probs))
   
 X_train, training_kept_idx = build_features(train_data)
-Y_train = train_data.loc[train_kept_idx, "outcome"].astype(int)
+Y_train = train_data.loc[train_kept_idx, "turnovers"].astype(int)
 
-BASE_COLUMNS = X_train.columns  # canonical column layout every later split reindexes to
+BASE_COLUMNS = X_train.columns  
 
 base_model, base_n_estimators = build_calibration_ready_model(X_train, Y_train)
 print("Base model n_estimators (from early stopping):", base_n_estimators)
 
-calibrated_base = CalibratedClassifierCV(estimator=base_model, method="isotonic", cv=5)
-calibrated_base.fit(X_train, Y_train)
 
-# expected_fg for every shot in train_data — this is what SMR+ is measured against
-train_data.loc[train_kept_idx, "expected_fg"] = calibrated_base.predict_proba(X_train)[:, 1]
+base_model.fit(X_train, Y_train)
+
+train_data.loc[train_kept_idx, "expected_tov"] = base_model.predict(X_train)
