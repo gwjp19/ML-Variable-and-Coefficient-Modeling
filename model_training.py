@@ -87,7 +87,7 @@ def find_best_n_estimators(X, y, max_estimators=2000, **overrides):
     
     probe_model = xgb.XGBRegressor(**params)
     probe_model.fit(
-        X_tr, y_tr 
+        X_tr, y_tr,
         eval_set=[(X_val, y_val)], 
         verbose=False
     )
