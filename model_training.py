@@ -1,7 +1,7 @@
 import pandas as pd
 import sqlite3
-import xgboost as xgb
-from pygam import LinearGAM, s, f
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score, mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
@@ -24,46 +24,141 @@ testing = testing.copy()
 training["_split"] = "train"
 testing["_split"] = "test"
 
-combined = pd.concat([training, testing], ignore_index = True)
+combined = pd.concat(
+    [training, testing],
+    ignore_index=True
+)
+
+training["_split"] = "train"
+testing["_split"] = "test"
+
+game_keys = ["season_id", "game_id"]
 
 combined["game_date"] = pd.to_datetime(combined["game_date"])
+combined = combined.sort_values(
+    ["game_date", "team_id"], kind="stable"
+).reset_index(drop=True)
+
+combined["possessions"] = (
+    combined["points"] /
+    combined["ppp"].replace(0, float("nan"))
+)
+
+pairings = combined[game_keys + ["team_id"]].merge(
+    combined[game_keys + ["team_id"]],
+    on=game_keys,
+    suffixes=("", "_opp")
+)
+
+pairings = pairings[
+    pairings["team_id"] != pairings["team_id_opp"]
+]
+
+if pairings.duplicated(game_keys + ["team_id"]).any():
+    raise ValueError(
+        "A team has multiple opponent matches for a game."
+    )
+
+pairings = pairings.rename(
+    columns={"team_id_opp": "opponent_id"}
+)
+
+combined = combined.merge(
+    pairings[game_keys + ["team_id", "opponent_id"]],
+    on=game_keys + ["team_id"],
+    how="left",
+    validate="one_to_one"
+)
+opponent_possessions = combined[
+    game_keys + ["team_id", "possessions"]
+].rename(columns={
+    "team_id": "opponent_id",
+    "possessions": "opp_possessions"
+})
+
+combined = combined.merge(
+    opponent_possessions,
+    on=game_keys + ["opponent_id"],
+    how="left",
+    validate="many_to_one"
+)
+
+combined["TOV_RATE"] = (
+    combined["turnovers"] / combined["possessions"]
+)
+
+combined["TOVF_RATE"] = (
+    combined["turnovers_forced"] /
+    combined["opp_possessions"]
+)
+
 combined = combined.sort_values(
     ["team_id", "game_date"], kind="stable"
 ).reset_index(drop=True)
 
-combined["TEAM_AVG_TOV"] = (
-    combined.groupby("team_id")["turnovers"]
+combined["TEAM_AVG_POSS"] = (
+    combined.groupby("team_id")["possessions"]
     .transform(lambda s: s.shift(1).expanding().mean())
 )
-combined["TEAM_AVG_TOVF"] = (
-    combined.groupby("team_id")["turnovers_forced"]
+
+combined["TEAM_AVG_TOV_RATE"] = (
+    combined.groupby("team_id")["TOV_RATE"]
     .transform(lambda s: s.shift(1).expanding().mean())
+)
+
+combined["TEAM_AVG_TOVF_RATE"] = (
+    combined.groupby("team_id")["TOVF_RATE"]
+    .transform(lambda s: s.shift(1).expanding().mean())
+)
+
+opponent_history = combined[
+    game_keys + [
+        "team_id",
+        "TEAM_AVG_TOV_RATE",
+        "TEAM_AVG_TOVF_RATE",
+        "TEAM_AVG_POSS"
+    ]
+].rename(columns={
+    "team_id": "opponent_id",
+    "TEAM_AVG_TOV_RATE": "OPP_AVG_TOV_RATE",
+    "TEAM_AVG_TOVF_RATE": "OPP_AVG_TOVF_RATE",
+    "TEAM_AVG_POSS": "OPP_AVG_POSS"
+})
+
+combined = combined.merge(
+    opponent_history,
+    on=game_keys + ["opponent_id"],
+    how="left",
+    validate="many_to_one"
 )
 
 training = (
     combined[combined["_split"] == "train"]
-    .drop(columns="_split")
+    .drop(columns=["_split"])
     .reset_index(drop=True)
 )
-training = (
+
+testing = (
     combined[combined["_split"] == "test"]
-    .drop(columns="_split")
+    .drop(columns=["_split"])
     .reset_index(drop=True)
 )
+
 train_data = training
 test_data = testing
-TOV_FEATURES = ["TEAM_AVG_TOV", "TEAM_AVG_TOVF"]
 
-BASE_XGB_PARAMS = dict(
-    learning_rate=0.03,
-    max_depth=6,
-    min_child_weight=10,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    reg_lambda=1.0,
-    eval_metric="mae",
-    random_state=42,
-    n_jobs=-1,
+TOV_FEATURES = [
+    "TEAM_AVG_TOV_RATE",
+    "TEAM_AVG_TOVF_RATE",
+    "OPP_AVG_TOV_RATE",
+    "OPP_AVG_TOVF_RATE",
+    "possessions"
+]
+
+model = LinearRegression(
+    fit_intercept=True,
+    copy_X=True,
+    n_jobs=-1
 )
 
 x = training[TOV_FEATURES].copy()
@@ -72,58 +167,45 @@ x = x.loc[keep].copy()
 kept_index = training.index[keep.to_numpy()]
 y = training.loc[kept_index, "turnovers"]
 
-def find_best_n_estimators(X, y, max_estimators=2000, **overrides):
-    split_idx = int(len(X) * 0.75)
-
-    X_tr, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_tr, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
-    
-    params = dict(
-        BASE_XGB_PARAMS, 
-        n_estimators=max_estimators, 
-        early_stopping_rounds=50
-    )
-    params.update(overrides)
-    
-    probe_model = xgb.XGBRegressor(**params)
-    probe_model.fit(
-        X_tr, y_tr,
-        eval_set=[(X_val, y_val)], 
-        verbose=False
-    )
-    return probe_model.best_iteration + 1
-
-
-def build_calibration_ready_model(X, y, **overrides):
-    best_n = find_best_n_estimators(X, y, **overrides)
-    params = dict(BASE_XGB_PARAMS, n_estimators=best_n)
-    params.update(overrides)
-    return xgb.XGBRegressor(**params), best_n
 
 def report(y_true, predictions, label):
     print(f"\n{label}")
     print("-" * len(label))
-    print("MAE:", mean_absolute_error(y_test, predictions))
-    print("RMSE:", mean_squared_error(y_test, predictions))
+    print("MAE:", mean_absolute_error(y_true, predictions))
+    print("RMSE:", mean_squared_error(y_true, predictions) ** 0.5)
   
-X_train, training_kept_idx = build_features(train_data)
-Y_train = train_data.loc[train_kept_idx, "turnovers"].astype(int)
+X_train = train_data[TOV_FEATURES]
+Y_train = train_data["turnovers"].astype(int)
 
-X_test, test_kept_idx = build_features(test_data)
-y_test = test_data/loc[test_kept_idx, "turnovers"]
+X_test = test_data[TOV_FEATURES]
+y_test = test_data["turnovers"].astype(int)
 
 BASE_COLUMNS = X_train.columns  
 X_test = X_test[BASE_COLUMNS]
 
-base_model, base_n_estimators = build_calibration_ready_model(X_train, Y_train)
-print("Base model n_estimators (from early stopping):", base_n_estimators)
+valid_rows = X_train.notna().all(axis=1) & Y_train.notna()
+
+X_train = X_train.iloc[valid_rows]
+Y_train = Y_train.iloc[valid_rows]
 
 
-base_model.fit(X_train, Y_train)
+valid_rows2 = X_test.notna().all(axis=1) & y_test.notna()
 
-train_data.loc[train_kept_idx, "expected_tov"] = base_model.predict(X_train)
+X_test = X_test.iloc[valid_rows2]
+y_test = y_test.iloc[valid_rows2]
 
-predictions = base_model.predict(X_test)
+
+polynomial = PolynomialFeatures(degree=3, include_bias=False)
+X_poly = polynomial.fit_transform(X_train)
+x_poly = polynomial.fit_transform(X_test)
+model.fit(X_poly, Y_train)
+
+predictions = model.predict(x_poly)
+
+test_data.loc[X_test.index, "expected_tov"] = predictions
 
 report(y_test, predictions, "Turnovers Model")
 
+baseline_predictions = [Y_train.mean()] * len(y_test)
+
+report(y_test, baseline_predictions, "Base Model")
